@@ -106,7 +106,7 @@ function buildCategories(): HTMLElement {
 
 function buildMinutes(): HTMLElement {
   const row = document.createElement('div');
-  row.className = 'choices';
+  row.className = 'choices minutes';
   for (const preset of DURATION_PRESETS) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -139,16 +139,19 @@ function buildMinutes(): HTMLElement {
 
 function buildScenes(): HTMLElement {
   const row = document.createElement('div');
-  row.className = 'choices';
+  row.className = 'choices scenes';
   for (const choice of SCENE_CHOICES) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'choice scene';
     button.title = choice.caption;
+    button.setAttribute('aria-label', `${choice.label}. ${choice.caption}`);
     const swatch = document.createElement('span');
     swatch.className = 'swatch';
+    swatch.setAttribute('aria-hidden', 'true');
     swatch.style.background = `linear-gradient(160deg, ${choice.swatch[0]}, ${choice.swatch[1]})`;
     const name = document.createElement('span');
+    name.className = 'scene-name';
     name.textContent = choice.label;
     button.append(swatch, name);
     button.addEventListener('click', () => switchScene(choice.id));
