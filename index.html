@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <meta name="description" content="A focus timer with living scenes: forest, birds, rain, ocean, night, meadow, embers, and snow." />
+    <meta id="theme-color" name="theme-color" content="#10241c" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Timer</title>
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <link rel="canonical" href="https://harsh.bet/timer/" />
+  </head>
+  <body>
+    <canvas id="scene" aria-hidden="true"></canvas>
+    <div class="vignette" aria-hidden="true"></div>
+    <div class="app">
+      <header class="top">
+        <p class="mark">Timer</p>
+        <div class="top-actions">
+          <button type="button" id="sound">Chime</button>
+          <button type="button" id="screen">Screensaver</button>
+        </div>
+      </header>
+      <main class="hero">
+        <p id="phase" class="phase">Focus</p>
+        <div class="stage">
+          <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
+            <circle class="ring-track" cx="50" cy="50" r="46"></circle>
+            <circle id="ring-value" class="ring-value" cx="50" cy="50" r="46"></circle>
+          </svg>
+          <p id="clock" class="clock" role="timer">25:00</p>
+        </div>
+        <p id="pips" class="pips"></p>
+        <div class="transport">
+          <button type="button" id="toggle" class="primary">Start</button>
+          <button type="button" id="reset">Reset</button>
+        </div>
+        <p id="live" class="sr-only" aria-live="polite"></p>
+      </main>
+      <footer class="dock" id="dock"></footer>
+    </div>
+    <noscript>Timer needs JavaScript to run the clock and the scenes.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
