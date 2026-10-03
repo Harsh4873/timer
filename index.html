@@ -21,7 +21,15 @@
         <div class="top-actions">
           <button type="button" id="sound">Chime</button>
           <button type="button" id="screen">Screensaver</button>
-          <button type="button" id="settings">Settings</button>
+          <button type="button" id="settings" aria-label="Settings" title="Settings">
+            <svg class="gear" viewBox="0 0 24 24" aria-hidden="true">
+              <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <circle cx="12" cy="12" r="6.4" />
+                <circle cx="12" cy="12" r="2.2" />
+                <path d="M12 2.8v2.8M12 18.4v2.8M2.8 12h2.8M18.4 12h2.8M5.5 5.5l2 2M16.5 16.5l2 2M18.5 5.5l-2 2M7.5 16.5l-2 2" />
+              </g>
+            </svg>
+          </button>
         </div>
       </header>
       <main class="hero">
@@ -33,7 +41,6 @@
           </svg>
           <p id="clock" class="clock" role="timer">25:00</p>
         </div>
-        <p id="pips" class="pips"></p>
         <div class="transport">
           <button type="button" id="toggle" class="primary">Start</button>
           <button type="button" id="reset">Reset</button>

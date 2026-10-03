@@ -8,7 +8,6 @@ import {
   categoryById,
   clockProgress,
   createPlan,
-  focusPips,
   formatClock,
   idleClock,
   matchingPresetId,
@@ -42,7 +41,6 @@ const canvas = document.querySelector<HTMLCanvasElement>('#scene');
 const phaseEl = document.querySelector<HTMLElement>('#phase');
 const clockEl = document.querySelector<HTMLElement>('#clock');
 const ringEl = document.querySelector<SVGCircleElement>('#ring-value');
-const pipsEl = document.querySelector<HTMLElement>('#pips');
 const liveEl = document.querySelector<HTMLElement>('#live');
 const toggleEl = document.querySelector<HTMLButtonElement>('#toggle');
 const resetEl = document.querySelector<HTMLButtonElement>('#reset');
@@ -52,7 +50,7 @@ const settingsEl = document.querySelector<HTMLButtonElement>('#settings');
 const dockEl = document.querySelector<HTMLElement>('#dock');
 const themeMeta = document.querySelector<HTMLMetaElement>('#theme-color');
 
-if (!canvas || !phaseEl || !clockEl || !ringEl || !pipsEl || !liveEl || !toggleEl || !resetEl || !soundEl || !screenEl || !settingsEl || !dockEl) {
+if (!canvas || !phaseEl || !clockEl || !ringEl || !liveEl || !toggleEl || !resetEl || !soundEl || !screenEl || !settingsEl || !dockEl) {
   throw new Error('Timer markup is missing');
 }
 
@@ -67,7 +65,8 @@ let sceneId: SceneId = 'forest';
 let scene: Scene = createScene(sceneId);
 let frameTime = 0;
 let wakeLock: WakeLockSentinel | null = null;
-let chromeTimer = 0;
+const IDLE_MS = 4000;
+let idleTimer = 0;
 let announced = '';
 let lastSave = 0;
 
@@ -228,23 +227,6 @@ function paintClock(now: number): void {
   else document.title = 'Timer';
 }
 
-function renderPips(): void {
-  const pips = focusPips(plan);
-  if (!pips) {
-    pipsEl!.hidden = true;
-    pipsEl!.replaceChildren();
-    return;
-  }
-  pipsEl!.hidden = false;
-  pipsEl!.replaceChildren();
-  for (let index = 0; index < pips.total; index += 1) {
-    const dot = document.createElement('span');
-    dot.className = index < pips.filled ? 'pip on' : 'pip';
-    pipsEl!.append(dot);
-  }
-  pipsEl!.setAttribute('aria-label', `${pips.filled} of ${pips.total} focus blocks done`);
-}
-
 function render(): void {
   const locked = clock.status === 'running';
   phaseEl!.textContent = clock.status === 'done' ? 'Done' : phaseLabel(plan);
@@ -273,10 +255,8 @@ function render(): void {
   screenEl!.textContent = screening ? (narrow ? 'Exit' : 'Exit screen') : (narrow ? 'Screen' : 'Screensaver');
   screenEl!.setAttribute('aria-pressed', String(screening));
   const settingsOpen = !document.body.classList.contains('settings-hidden');
-  settingsEl!.textContent = narrow ? 'Setup' : 'Settings';
   settingsEl!.setAttribute('aria-pressed', String(settingsOpen));
   settingsEl!.title = settingsOpen ? 'Hide the setup panel' : 'Show the setup panel';
-  renderPips();
   paintClock(Date.now());
 }
 
@@ -383,13 +363,16 @@ async function syncWakeLock(): Promise<void> {
   wakeLock = null;
 }
 
-function pokeChrome(): void {
-  document.body.classList.remove('chrome-hidden');
-  window.clearTimeout(chromeTimer);
-  if (!document.body.classList.contains('screen')) return;
-  chromeTimer = window.setTimeout(() => {
+function armIdle(): void {
+  window.clearTimeout(idleTimer);
+  idleTimer = window.setTimeout(() => {
     document.body.classList.add('chrome-hidden');
-  }, 3500);
+  }, IDLE_MS);
+}
+
+function wake(): void {
+  document.body.classList.remove('chrome-hidden');
+  armIdle();
 }
 
 async function setScreensaver(on: boolean): Promise<void> {
@@ -397,7 +380,7 @@ async function setScreensaver(on: boolean): Promise<void> {
   if (on) {
     // Hide the chrome at once. Mobile browsers often refuse fullscreen,
     // and waiting for the timeout made the button look dead.
-    window.clearTimeout(chromeTimer);
+    window.clearTimeout(idleTimer);
     document.body.classList.add('chrome-hidden');
     try {
       await document.documentElement.requestFullscreen();
@@ -461,6 +444,7 @@ resize();
 if (themeMeta) themeMeta.content = THEME[sceneId];
 render();
 void syncWakeLock();
+armIdle();
 
 toggleEl.addEventListener('click', () => {
   void toggleRun();
@@ -481,32 +465,37 @@ settingsEl.addEventListener('click', toggleSettings);
 window.addEventListener('resize', resize);
 window.addEventListener('pointermove', (event) => {
   scene.pointer({ x: event.clientX, y: event.clientY, inside: true });
-  if (document.body.classList.contains('screen')) pokeChrome();
+  wake();
 });
 window.addEventListener('pointerdown', (event) => {
+  const hidden = document.body.classList.contains('chrome-hidden');
+  wake();
   const target = event.target instanceof Element ? event.target : null;
   const onControl = Boolean(target?.closest('button, input, a, .dock, .top'));
-  if (document.body.classList.contains('screen') && document.body.classList.contains('chrome-hidden')) {
-    pokeChrome();
-    if (!onControl) return;
-  }
+  if (hidden && !onControl) return;
   if (!onControl) scene.pulse(event.clientX, event.clientY, frameTime);
 });
+window.addEventListener('wheel', wake, { passive: true });
 window.addEventListener('pointerleave', () => {
   scene.pointer({ x: 0, y: 0, inside: false });
 });
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) tick(Date.now());
+  if (!document.hidden) {
+    tick(Date.now());
+    wake();
+  }
   void syncWakeLock();
 });
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement && document.body.classList.contains('screen')) {
     document.body.classList.remove('screen', 'chrome-hidden');
+    wake();
     render();
     void syncWakeLock();
   }
 });
 document.addEventListener('keydown', (event) => {
+  wake();
   if (event.key === 'Escape' && document.body.classList.contains('screen')) {
     event.preventDefault();
     void setScreensaver(false);
