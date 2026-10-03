@@ -146,6 +146,8 @@ button:focus-visible, input:focus-visible {
 .ring {
   position: absolute;
   inset: 6%;
+  width: 88%;
+  height: 88%;
   overflow: visible;
 }
 
