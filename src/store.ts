@@ -19,6 +19,7 @@ export interface PersistedSession {
   clock: Clock;
   phase: PhaseKind;
   focusBlocksCompleted: number;
+  settingsOpen: boolean;
 }
 
 function isPhase(value: unknown): value is PhaseKind {
@@ -56,6 +57,7 @@ export function loadSession(): PersistedSession | null {
       clock: safeClock,
       phase: parsed.phase,
       focusBlocksCompleted: Math.floor(parsed.focusBlocksCompleted ?? 0),
+      settingsOpen: parsed.settingsOpen !== false,
     };
   } catch {
     return null;
@@ -70,7 +72,7 @@ export function saveSession(session: PersistedSession): void {
   }
 }
 
-export function sessionFrom(plan: Plan, sceneId: SceneId, sound: SoundMode, clock: Clock): PersistedSession {
+export function sessionFrom(plan: Plan, sceneId: SceneId, sound: SoundMode, clock: Clock, settingsOpen: boolean): PersistedSession {
   return {
     categoryId: plan.categoryId,
     focusSeconds: plan.focusSeconds,
@@ -79,5 +81,6 @@ export function sessionFrom(plan: Plan, sceneId: SceneId, sound: SoundMode, cloc
     clock,
     phase: plan.phase,
     focusBlocksCompleted: plan.focusBlocksCompleted,
+    settingsOpen,
   };
 }

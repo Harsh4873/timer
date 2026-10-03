@@ -273,6 +273,10 @@ body.screen.chrome-hidden .transport {
   display: none;
 }
 
+body.settings-hidden .dock {
+  display: none;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

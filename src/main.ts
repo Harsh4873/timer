@@ -48,10 +48,11 @@ const toggleEl = document.querySelector<HTMLButtonElement>('#toggle');
 const resetEl = document.querySelector<HTMLButtonElement>('#reset');
 const soundEl = document.querySelector<HTMLButtonElement>('#sound');
 const screenEl = document.querySelector<HTMLButtonElement>('#screen');
+const settingsEl = document.querySelector<HTMLButtonElement>('#settings');
 const dockEl = document.querySelector<HTMLElement>('#dock');
 const themeMeta = document.querySelector<HTMLMetaElement>('#theme-color');
 
-if (!canvas || !phaseEl || !clockEl || !ringEl || !pipsEl || !liveEl || !toggleEl || !resetEl || !soundEl || !screenEl || !dockEl) {
+if (!canvas || !phaseEl || !clockEl || !ringEl || !pipsEl || !liveEl || !toggleEl || !resetEl || !soundEl || !screenEl || !settingsEl || !dockEl) {
   throw new Error('Timer markup is missing');
 }
 
@@ -271,6 +272,10 @@ function render(): void {
   const narrow = window.matchMedia('(max-width: 720px)').matches;
   screenEl!.textContent = screening ? (narrow ? 'Exit' : 'Exit screen') : (narrow ? 'Screen' : 'Screensaver');
   screenEl!.setAttribute('aria-pressed', String(screening));
+  const settingsOpen = !document.body.classList.contains('settings-hidden');
+  settingsEl!.textContent = narrow ? 'Setup' : 'Settings';
+  settingsEl!.setAttribute('aria-pressed', String(settingsOpen));
+  settingsEl!.title = settingsOpen ? 'Hide the setup panel' : 'Show the setup panel';
   renderPips();
   paintClock(Date.now());
 }
@@ -345,7 +350,13 @@ function reset(): void {
 }
 
 function save(): void {
-  saveSession(sessionFrom(plan, sceneId, sound.mode, clock));
+  saveSession(sessionFrom(plan, sceneId, sound.mode, clock, !document.body.classList.contains('settings-hidden')));
+}
+
+function toggleSettings(): void {
+  document.body.classList.toggle('settings-hidden');
+  render();
+  save();
 }
 
 async function syncWakeLock(): Promise<void> {
@@ -384,7 +395,10 @@ function pokeChrome(): void {
 async function setScreensaver(on: boolean): Promise<void> {
   document.body.classList.toggle('screen', on);
   if (on) {
-    pokeChrome();
+    // Hide the chrome at once. Mobile browsers often refuse fullscreen,
+    // and waiting for the timeout made the button look dead.
+    window.clearTimeout(chromeTimer);
+    document.body.classList.add('chrome-hidden');
     try {
       await document.documentElement.requestFullscreen();
     } catch {
@@ -417,6 +431,7 @@ function restore(): void {
   scene = createScene(sceneId);
   sound.setScene(saved.sceneId);
   sound.setMode(saved.sound);
+  document.body.classList.toggle('settings-hidden', saved.settingsOpen === false);
   const now = Date.now();
   clock = tickClock(saved.clock, now);
   if (saved.clock.status === 'running' && clock.status === 'done') {
@@ -461,6 +476,7 @@ soundEl.addEventListener('click', () => {
 screenEl.addEventListener('click', () => {
   void setScreensaver(!document.body.classList.contains('screen'));
 });
+settingsEl.addEventListener('click', toggleSettings);
 
 window.addEventListener('resize', resize);
 window.addEventListener('pointermove', (event) => {
