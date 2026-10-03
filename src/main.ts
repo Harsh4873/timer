@@ -199,6 +199,7 @@ function switchScene(id: SceneId): void {
   }
   sceneId = id;
   scene = createScene(id);
+  sound.setScene(id);
   resize();
   if (themeMeta) themeMeta.content = THEME[id];
   render();
@@ -265,6 +266,7 @@ function render(): void {
   toggleEl!.textContent = clock.status === 'running' ? 'Pause' : clock.status === 'paused' ? 'Resume' : clock.status === 'done' ? 'Again' : 'Start';
   soundEl!.textContent = sound.label();
   soundEl!.setAttribute('aria-pressed', String(sound.mode !== 'off'));
+  soundEl!.title = sound.mode === 'ambient' ? `Ambient follows the scene: ${sound.label()}` : sound.label();
   const screening = document.body.classList.contains('screen');
   const narrow = window.matchMedia('(max-width: 720px)').matches;
   screenEl!.textContent = screening ? (narrow ? 'Exit' : 'Exit screen') : (narrow ? 'Screen' : 'Screensaver');
@@ -413,6 +415,7 @@ function restore(): void {
   };
   sceneId = saved.sceneId;
   scene = createScene(sceneId);
+  sound.setScene(saved.sceneId);
   sound.setMode(saved.sound);
   const now = Date.now();
   clock = tickClock(saved.clock, now);
@@ -433,7 +436,6 @@ function frame(time: number): void {
   if (!document.hidden) {
     scene.draw(ctx!, time, reducedMotion.matches);
     paintClock(Date.now());
-    sound.tick(sceneId, time);
   }
   window.requestAnimationFrame(frame);
 }
