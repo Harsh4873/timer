@@ -295,7 +295,10 @@ function tick(now: number): void {
   const before = clock.status;
   clock = tickClock(clock, now);
   const finished = before === 'running' && clock.status === 'done';
-  if (finished) finishPhase(now);
+  if (finished) {
+    finishPhase(now);
+    void syncWakeLock();
+  }
   render();
   if (finished || now - lastSave > 5000) {
     lastSave = now;
