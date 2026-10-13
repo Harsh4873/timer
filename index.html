@@ -17,7 +17,7 @@
     <div class="vignette" aria-hidden="true"></div>
     <div class="app">
       <header class="top">
-        <p class="mark">Timer</p>
+        <h1 class="mark">Timer</h1>
         <div class="top-actions">
           <button type="button" id="sound">Chime</button>
           <button type="button" id="screen">Screensaver</button>
@@ -33,13 +33,16 @@
         </div>
       </header>
       <main class="hero">
-        <p id="phase" class="phase">Focus</p>
+        <div class="status">
+          <p id="phase" class="phase">Focus</p>
+          <p id="progress" class="progress" hidden></p>
+        </div>
         <div class="stage">
           <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
             <circle class="ring-track" cx="50" cy="50" r="46"></circle>
             <circle id="ring-value" class="ring-value" cx="50" cy="50" r="46"></circle>
           </svg>
-          <p id="clock" class="clock" role="timer">25:00</p>
+          <p id="clock" class="clock" role="timer" tabindex="-1" aria-live="off" aria-label="25:00 remaining" aria-describedby="phase">25:00</p>
         </div>
         <div class="transport">
           <button type="button" id="toggle" class="primary">Start</button>

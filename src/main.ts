@@ -1,4 +1,4 @@
-import { createSound } from './audio.ts';
+import { createSound, soundLabel } from './audio.ts';
 import { SCENE_CHOICES, createScene } from './scenes/index.ts';
 import type { Scene, SceneId } from './scenes/types.ts';
 import { loadSession, saveSession, sessionFrom } from './store.ts';
@@ -6,18 +6,20 @@ import {
   CATEGORIES,
   DURATION_PRESETS,
   categoryById,
+  catchUp,
   clockProgress,
   createPlan,
+  focusPips,
   formatClock,
+  formatFocusMinutes,
   idleClock,
   matchingPresetId,
-  nextPhase,
   phaseDurationSeconds,
   phaseLabel,
+  progressLabel,
   remainingMs,
   startClock,
   pauseClock,
-  tickClock,
   clampFocusSeconds,
   type CategoryId,
   type Clock,
@@ -26,6 +28,7 @@ import {
 import './styles.css';
 
 const RING = 2 * Math.PI * 46;
+const LIGHT_SCENES = new Set<SceneId>(['flock', 'ocean', 'meadow', 'snow']);
 const THEME: Record<SceneId, string> = {
   forest: '#10241c',
   flock: '#1c2430',
@@ -39,6 +42,7 @@ const THEME: Record<SceneId, string> = {
 
 const canvas = document.querySelector<HTMLCanvasElement>('#scene');
 const phaseEl = document.querySelector<HTMLElement>('#phase');
+const progressEl = document.querySelector<HTMLElement>('#progress');
 const clockEl = document.querySelector<HTMLElement>('#clock');
 const ringEl = document.querySelector<SVGCircleElement>('#ring-value');
 const liveEl = document.querySelector<HTMLElement>('#live');
@@ -50,7 +54,7 @@ const settingsEl = document.querySelector<HTMLButtonElement>('#settings');
 const dockEl = document.querySelector<HTMLElement>('#dock');
 const themeMeta = document.querySelector<HTMLMetaElement>('#theme-color');
 
-if (!canvas || !phaseEl || !clockEl || !ringEl || !liveEl || !toggleEl || !resetEl || !soundEl || !screenEl || !settingsEl || !dockEl) {
+if (!canvas || !phaseEl || !progressEl || !clockEl || !ringEl || !liveEl || !toggleEl || !resetEl || !soundEl || !screenEl || !settingsEl || !dockEl) {
   throw new Error('Timer markup is missing');
 }
 
@@ -69,6 +73,8 @@ const IDLE_MS = 4000;
 let idleTimer = 0;
 let announced = '';
 let lastSave = 0;
+let progressShown = '';
+let wakeLockPending = false;
 
 const categoryButtons = new Map<CategoryId, HTMLButtonElement>();
 const durationButtons = new Map<string, HTMLButtonElement>();
@@ -97,6 +103,7 @@ function buildCategories(): HTMLElement {
     button.className = 'choice';
     button.textContent = category.label;
     button.title = category.detail;
+    button.setAttribute('aria-description', category.detail);
     button.addEventListener('click', () => selectCategory(category.id));
     categoryButtons.set(category.id, button);
     row.append(button);
@@ -124,12 +131,16 @@ function buildMinutes(): HTMLElement {
   input.type = 'number';
   input.min = '1';
   input.max = '180';
-  input.step = '1';
-  input.inputMode = 'numeric';
+  input.step = 'any';
+  input.inputMode = 'decimal';
   input.setAttribute('aria-label', 'Custom minutes');
   input.addEventListener('change', () => {
     const value = Number(input.value);
-    if (Number.isFinite(value)) setFocusSeconds(value * 60);
+    if (!Number.isFinite(value)) {
+      render();
+      return;
+    }
+    setFocusSeconds(value * 60);
   });
   label.append(input);
   minutesInput = input;
@@ -163,11 +174,12 @@ function buildScenes(): HTMLElement {
 
 function selectCategory(id: CategoryId): void {
   if (clock.status === 'running') return;
+  if (id === plan.categoryId) return;
   const category = categoryById(id);
   plan = createPlan(id, category.defaultSeconds);
   clock = idleClock(phaseDurationSeconds(plan) * 1000);
   switchScene(category.defaultScene);
-  say(phaseLabel(plan));
+  say(`${category.label} selected. ${formatFocusMinutes(category.defaultSeconds)} minutes.`);
   render();
   save();
 }
@@ -218,7 +230,12 @@ function resize(): void {
 
 function paintClock(now: number): void {
   const ms = remainingMs(clock, now);
-  clockEl!.textContent = formatClock(ms);
+  const digits = formatClock(ms);
+  clockEl!.textContent = digits;
+  if (document.activeElement !== clockEl) {
+    const name = `${digits} remaining`;
+    if (clockEl!.getAttribute('aria-label') !== name) clockEl!.setAttribute('aria-label', name);
+  }
   ringEl!.style.strokeDasharray = `${RING} ${RING}`;
   ringEl!.style.strokeDashoffset = String(RING * clockProgress(clock, now));
   if (clock.status === 'running') document.title = `${formatClock(ms)} · ${phaseLabel(plan)}`;
@@ -239,17 +256,30 @@ function render(): void {
     button.setAttribute('aria-pressed', String(id === preset));
     button.disabled = locked;
   }
-  if (minutesInput && document.activeElement !== minutesInput) {
-    minutesInput.value = String(Math.round(plan.focusSeconds / 60));
+  if (minutesInput) {
+    minutesInput.value = formatFocusMinutes(plan.focusSeconds);
+    minutesInput.disabled = locked;
   }
-  if (minutesInput) minutesInput.disabled = locked;
   for (const [id, button] of sceneButtons) {
     button.setAttribute('aria-pressed', String(id === sceneId));
   }
   toggleEl!.textContent = clock.status === 'running' ? 'Pause' : clock.status === 'paused' ? 'Resume' : clock.status === 'done' ? 'Again' : 'Start';
-  soundEl!.textContent = sound.label();
+  const voice = sound.mode === 'ambient' ? sound.label() : '';
+  soundEl!.textContent = soundLabel(sound.mode);
   soundEl!.setAttribute('aria-pressed', String(sound.mode !== 'off'));
-  soundEl!.title = sound.mode === 'ambient' ? `Ambient follows the scene: ${sound.label()}` : sound.label();
+  if (sound.mode === 'ambient') {
+    soundEl!.setAttribute('aria-label', `Ambient room tone, ${voice}`);
+    soundEl!.setAttribute('aria-description', `${voice} follows the scene`);
+    soundEl!.title = `${voice} follows the scene`;
+  } else if (sound.mode === 'chime') {
+    soundEl!.setAttribute('aria-label', 'Chime');
+    soundEl!.setAttribute('aria-description', 'Plays a chime when a block ends');
+    soundEl!.title = 'Plays a chime when a block ends';
+  } else {
+    soundEl!.setAttribute('aria-label', 'Sound off');
+    soundEl!.setAttribute('aria-description', 'No chime or room tone');
+    soundEl!.title = 'No chime or room tone';
+  }
   const screening = document.body.classList.contains('screen');
   const narrow = window.matchMedia('(max-width: 720px)').matches;
   screenEl!.textContent = screening ? (narrow ? 'Exit' : 'Exit screen') : (narrow ? 'Screen' : 'Screensaver');
@@ -257,7 +287,40 @@ function render(): void {
   const settingsOpen = !document.body.classList.contains('settings-hidden');
   settingsEl!.setAttribute('aria-pressed', String(settingsOpen));
   settingsEl!.title = settingsOpen ? 'Hide the setup panel' : 'Show the setup panel';
+  document.body.classList.toggle('scene-light', LIGHT_SCENES.has(sceneId));
+  renderProgress();
+  clockEl!.setAttribute('aria-describedby', progressEl!.hidden ? 'phase' : 'phase progress');
   paintClock(Date.now());
+}
+
+function renderProgress(): void {
+  const label = progressLabel(plan) ?? '';
+  const pips = focusPips(plan);
+  if (!label || !pips) {
+    progressShown = '';
+    progressEl!.hidden = true;
+    progressEl!.replaceChildren();
+    return;
+  }
+  if (label === progressShown && !progressEl!.hidden) return;
+  progressShown = label;
+  progressEl!.hidden = false;
+  const dots = document.createElement('span');
+  dots.className = 'pips';
+  dots.setAttribute('aria-hidden', 'true');
+  for (let index = 0; index < pips.total; index += 1) {
+    const dot = document.createElement('span');
+    dot.className = index < pips.filled ? 'pip on' : 'pip';
+    dots.append(dot);
+  }
+  const text = document.createElement('span');
+  text.textContent = label;
+  progressEl!.replaceChildren(dots, text);
+}
+
+function spoken(message: string): string {
+  const detail = progressLabel(plan);
+  return detail ? `${message} ${detail}.` : message;
 }
 
 function say(message: string): void {
@@ -275,28 +338,24 @@ function notify(title: string, body: string): void {
   }
 }
 
-function finishPhase(now: number): void {
-  sound.chime();
-  const finished = phaseLabel(plan);
-  if (categoryById(plan.categoryId).cycle) {
-    plan = nextPhase(plan);
-    clock = startClock(idleClock(phaseDurationSeconds(plan) * 1000), now);
-    const next = phaseLabel(plan);
-    say(`${finished} finished. ${next} started.`);
-    notify(`${finished} finished`, `${next} started.`);
-  } else {
-    say(`${finished} finished.`);
-    notify(`${finished} finished`, 'The block is done.');
-  }
-}
-
 function tick(now: number): void {
   if (clock.status !== 'running') return;
-  const before = clock.status;
-  clock = tickClock(clock, now);
-  const finished = before === 'running' && clock.status === 'done';
+  const caught = catchUp(plan, clock, now);
+  const finished = caught.finishedLabels.length > 0;
+  plan = caught.plan;
+  clock = caught.clock;
   if (finished) {
-    finishPhase(now);
+    sound.chime();
+    const last = caught.finishedLabels[caught.finishedLabels.length - 1] ?? phaseLabel(plan);
+    if (clock.status === 'running') {
+      const next = phaseLabel(plan);
+      const lead = caught.finishedLabels.length === 1 ? `${last} finished.` : `${caught.finishedLabels.length} blocks finished.`;
+      say(spoken(`${lead} ${next} started.`));
+      notify(`${last} finished`, `${next} started.`);
+    } else {
+      say(spoken(`${last} finished.`));
+      notify(`${last} finished`, 'The block is done.');
+    }
     void syncWakeLock();
   }
   render();
@@ -307,19 +366,21 @@ function tick(now: number): void {
 }
 
 async function toggleRun(): Promise<void> {
-  await sound.unlock();
-  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+  const now = Date.now();
+  const starting = clock.status !== 'running';
+  clock = starting ? startClock(clock, now) : pauseClock(clock, now);
+  say(clock.status === 'running' ? `${phaseLabel(plan)} started.` : 'Paused.');
+  render();
+  save();
+  wake();
+  if (starting && typeof Notification !== 'undefined' && Notification.permission === 'default') {
     try {
-      await Notification.requestPermission();
+      void Notification.requestPermission();
     } catch {
       // Permission can fail in embedded browsers.
     }
   }
-  const now = Date.now();
-  clock = clock.status === 'running' ? pauseClock(clock, now) : startClock(clock, now);
-  say(clock.status === 'running' ? `${phaseLabel(plan)} started.` : 'Paused.');
-  render();
-  save();
+  await sound.unlock();
   await syncWakeLock();
 }
 
@@ -329,6 +390,7 @@ function reset(): void {
   say('Reset.');
   render();
   save();
+  wake();
   void syncWakeLock();
 }
 
@@ -345,31 +407,63 @@ function toggleSettings(): void {
 async function syncWakeLock(): Promise<void> {
   const want = clock.status === 'running' || document.body.classList.contains('screen');
   if (!('wakeLock' in navigator)) return;
-  if (want) {
-    if (wakeLock) return;
+  if (!want) {
+    const current = wakeLock;
+    wakeLock = null;
+    if (!current) return;
     try {
-      wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', () => {
-        wakeLock = null;
-      });
+      await current.release();
     } catch {
-      wakeLock = null;
+      // Already released.
     }
     return;
   }
-  if (!wakeLock) return;
+  if (document.hidden) return;
+  if ((wakeLock && !wakeLock.released) || wakeLockPending) return;
+  wakeLockPending = true;
   try {
-    await wakeLock.release();
+    const sentinel = await navigator.wakeLock.request('screen');
+    if (clock.status !== 'running' && !document.body.classList.contains('screen')) {
+      wakeLock = null;
+      try {
+        await sentinel.release();
+      } catch {
+        // Already released.
+      }
+      return;
+    }
+    wakeLock = sentinel;
+    sentinel.addEventListener('release', () => {
+      if (wakeLock === sentinel) wakeLock = null;
+      if (document.hidden) return;
+      void syncWakeLock();
+    });
   } catch {
-    // Already released.
+    wakeLock = null;
+  } finally {
+    wakeLockPending = false;
   }
-  wakeLock = null;
+}
+
+function hideChrome(): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active.closest('.top, .dock, .transport, .status')) {
+    const digits = clockEl!.textContent ?? '';
+    clockEl!.setAttribute('aria-label', `${digits} remaining`);
+    clockEl!.focus({ preventScroll: true });
+  }
+  document.body.classList.add('chrome-hidden');
 }
 
 function armIdle(): void {
   window.clearTimeout(idleTimer);
+  const screening = document.body.classList.contains('screen');
+  if (reducedMotion.matches && !screening) return;
+  if (clock.status !== 'running' && !screening) return;
   idleTimer = window.setTimeout(() => {
-    document.body.classList.add('chrome-hidden');
+    if (reducedMotion.matches && !document.body.classList.contains('screen')) return;
+    if (clock.status !== 'running' && !document.body.classList.contains('screen')) return;
+    hideChrome();
   }, IDLE_MS);
 }
 
@@ -384,7 +478,7 @@ async function setScreensaver(on: boolean): Promise<void> {
     // Hide the chrome at once. Mobile browsers often refuse fullscreen,
     // and waiting for the timeout made the button look dead.
     window.clearTimeout(idleTimer);
-    document.body.classList.add('chrome-hidden');
+    hideChrome();
     try {
       await document.documentElement.requestFullscreen();
     } catch {
@@ -401,6 +495,7 @@ async function setScreensaver(on: boolean): Promise<void> {
     }
   }
   render();
+  armIdle();
   await syncWakeLock();
 }
 
@@ -418,17 +513,20 @@ function restore(): void {
   sound.setScene(saved.sceneId);
   sound.setMode(saved.sound);
   document.body.classList.toggle('settings-hidden', saved.settingsOpen === false);
-  const now = Date.now();
-  clock = tickClock(saved.clock, now);
-  if (saved.clock.status === 'running' && clock.status === 'done') {
-    if (categoryById(plan.categoryId).cycle) {
-      plan = nextPhase(plan);
-      clock = idleClock(phaseDurationSeconds(plan) * 1000);
-      say(`${phaseLabel(plan)} is ready.`);
+  const caught = catchUp(plan, saved.clock, Date.now());
+  plan = caught.plan;
+  clock = caught.clock;
+  if (caught.finishedLabels.length > 0) {
+    if (clock.status === 'running') {
+      const lead = caught.finishedLabels.length === 1
+        ? `${phaseLabel(plan)} is underway.`
+        : `${caught.finishedLabels.length} blocks passed. ${phaseLabel(plan)} is underway.`;
+      say(spoken(lead));
     } else {
-      say('The block finished while this was closed.');
+      say(spoken('The block finished while this was closed.'));
     }
     notify(phaseLabel(plan), 'A block finished while this was closed.');
+    save();
   }
 }
 
@@ -486,6 +584,7 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     tick(Date.now());
     wake();
+    wakeLock = null;
   }
   void syncWakeLock();
 });
@@ -497,15 +596,37 @@ document.addEventListener('fullscreenchange', () => {
     void syncWakeLock();
   }
 });
+reducedMotion.addEventListener('change', () => {
+  if (reducedMotion.matches && !document.body.classList.contains('screen')) {
+    window.clearTimeout(idleTimer);
+    document.body.classList.remove('chrome-hidden');
+    return;
+  }
+  armIdle();
+});
+
 document.addEventListener('keydown', (event) => {
-  wake();
+  if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  const typing = Boolean(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'));
+  if (typing) {
+    wake();
+    return;
+  }
   if (event.key === 'Escape' && document.body.classList.contains('screen')) {
     event.preventDefault();
     void setScreensaver(false);
     return;
   }
-  const target = event.target instanceof HTMLElement ? event.target : null;
-  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON')) return;
+  const hidden = document.body.classList.contains('chrome-hidden');
+  const shortcut = event.key === ' ' || event.key === 'f' || event.key === 'F' || event.key === 'r' || event.key === 'R';
+  if (hidden && shortcut) {
+    if (event.key === ' ') event.preventDefault();
+    wake();
+    return;
+  }
+  wake();
+  if (target && target.tagName === 'BUTTON') return;
   if (event.key === ' ') {
     event.preventDefault();
     void toggleRun();

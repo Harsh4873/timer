@@ -63,10 +63,10 @@ export function createRain(): Scene {
       for (const drop of drops) {
         drop.y += drop.speed * drop.depth * dt * 60;
         drop.x -= 0.6 * dt * 60;
-        if (pointer.inside) {
+        if (pointer.inside && dt > 0) {
           const dx = drop.x - pointer.x;
           const dy = drop.y - pointer.y;
-          if (dx * dx + dy * dy < 110 * 110) drop.x += dx * 0.04;
+          if (dx * dx + dy * dy < 110 * 110) drop.x += dx * 0.04 * dt * 60;
         }
         if (drop.y > height + 20) {
           drop.y = -30;

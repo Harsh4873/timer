@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  catchUp,
   clockProgress,
   createPlan,
   focusPips,
   formatClock,
+  formatFocusMinutes,
   idleClock,
   nextPhase,
   pauseClock,
   phaseDurationSeconds,
   phaseLabel,
+  progressLabel,
   startClock,
   tickClock,
 } from './timer.ts';
@@ -89,6 +92,78 @@ test('pips fill through a set and clear after the long break', () => {
   assert.equal(focusPips(createPlan('meditation')), null);
   assert.equal(phaseLabel(createPlan('deep-work')), 'Deep work');
   assert.equal(phaseLabel({ ...createPlan('pomodoro'), phase: 'short-break' }), 'Short break');
+});
+
+test('pomodoro progress names the next break', () => {
+  let plan = createPlan('pomodoro');
+  assert.equal(progressLabel(plan), '0 of 4 · 5 minute break next');
+  plan = nextPhase(plan);
+  assert.equal(progressLabel(plan), '1 of 4 · 5 minute break');
+  plan = { ...createPlan('pomodoro'), phase: 'focus', focusBlocksCompleted: 3 };
+  assert.equal(progressLabel(plan), '3 of 4 · 15 minute break next');
+  plan = { ...plan, phase: 'long-break', focusBlocksCompleted: 4 };
+  assert.equal(progressLabel(plan), '4 of 4 · 15 minute break');
+  assert.equal(progressLabel(createPlan('reading')), null);
+});
+
+test('custom minutes follow the clamped length', () => {
+  assert.equal(formatFocusMinutes(90), '1.5');
+  assert.equal(formatFocusMinutes(25 * 60), '25');
+  assert.equal(formatFocusMinutes(999 * 60), '180');
+  assert.equal(formatFocusMinutes(30), '1');
+});
+
+test('the next phase starts at the previous end, not at a late tick', () => {
+  const plan = createPlan('pomodoro', 25 * 60);
+  const clock = startClock(idleClock(25 * 60 * 1000), 0);
+  const caught = catchUp(plan, clock, 25 * 60 * 1000 + 500);
+  assert.equal(caught.plan.phase, 'short-break');
+  assert.equal(caught.clock.status, 'running');
+  assert.equal(caught.clock.endsAt, 25 * 60 * 1000 + 5 * 60 * 1000);
+  assert.equal(caught.clock.remainingMs, 5 * 60 * 1000 - 500);
+  assert.deepEqual(caught.finishedLabels, ['Focus']);
+});
+
+test('overdue pomodoro phases keep running from the original end', () => {
+  const now = 5_000_000;
+  const endsAt = now - 90 * 60 * 1000;
+  const plan = { ...createPlan('pomodoro', 25 * 60), phase: 'focus' as const, focusBlocksCompleted: 3 };
+  const clock = { status: 'running' as const, durationMs: 25 * 60 * 1000, remainingMs: 0, endsAt };
+  const caught = catchUp(plan, clock, now);
+  assert.equal(caught.plan.phase, 'focus');
+  assert.equal(caught.plan.focusBlocksCompleted, 6);
+  assert.equal(caught.clock.status, 'running');
+  assert.equal(caught.clock.endsAt, endsAt + (15 + 25 + 5 + 25 + 5 + 25) * 60 * 1000);
+  assert.equal(caught.clock.remainingMs, 10 * 60 * 1000);
+  assert.equal(caught.finishedLabels.length, 6);
+});
+
+test('catch-up keeps a phase that has not ended', () => {
+  const plan = createPlan('reading');
+  const clock = startClock(idleClock(60_000), 0);
+  const caught = catchUp(plan, clock, 15_000);
+  assert.equal(caught.clock.status, 'running');
+  assert.equal(caught.clock.remainingMs, 45_000);
+  assert.equal(caught.clock.endsAt, 60_000);
+  assert.equal(caught.finishedLabels.length, 0);
+});
+
+test('a one-shot block stays done when the tick is late', () => {
+  const plan = createPlan('deep-work');
+  const clock = startClock(idleClock(10_000), 1_000);
+  const caught = catchUp(plan, clock, 50_000);
+  assert.equal(caught.clock.status, 'done');
+  assert.equal(caught.plan.phase, 'focus');
+  assert.deepEqual(caught.finishedLabels, ['Deep work']);
+});
+
+test('catch-up leaves a paused clock alone', () => {
+  const plan = createPlan('pomodoro');
+  const clock = pauseClock(startClock(idleClock(10_000), 0), 4_000);
+  const caught = catchUp(plan, clock, 90_000);
+  assert.equal(caught.clock.status, 'paused');
+  assert.equal(caught.clock.remainingMs, clock.remainingMs);
+  assert.equal(caught.finishedLabels.length, 0);
 });
 
 test('progress drains as time passes', () => {

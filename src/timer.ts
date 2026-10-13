@@ -160,6 +160,25 @@ export function focusPips(plan: Plan): { filled: number; total: number } | null 
   return { filled: plan.focusBlocksCompleted % total, total };
 }
 
+export function progressLabel(plan: Plan): string | null {
+  const cycle = categoryById(plan.categoryId).cycle;
+  const pips = focusPips(plan);
+  if (!cycle || !pips) return null;
+  const count = `${pips.filled} of ${pips.total}`;
+  const shortMinutes = cycle.shortBreakSeconds / 60;
+  const longMinutes = cycle.longBreakSeconds / 60;
+  if (plan.phase === 'short-break') return `${count} · ${shortMinutes} minute break`;
+  if (plan.phase === 'long-break') return `${count} · ${longMinutes} minute break`;
+  const nextMinutes = pips.filled + 1 >= pips.total ? longMinutes : shortMinutes;
+  return `${count} · ${nextMinutes} minute break next`;
+}
+
+export function formatFocusMinutes(seconds: number): string {
+  const minutes = clampFocusSeconds(seconds) / 60;
+  const rounded = Math.round(minutes * 1000) / 1000;
+  return String(rounded);
+}
+
 export function matchingPresetId(seconds: number): string | null {
   return DURATION_PRESETS.find((preset) => preset.seconds === seconds)?.id ?? null;
 }
@@ -191,6 +210,54 @@ export function tickClock(clock: Clock, now: number): Clock {
   const remaining = Math.max(0, clock.endsAt - now);
   if (remaining === 0) return { ...clock, status: 'done', remainingMs: 0, endsAt: null };
   return { ...clock, remainingMs: remaining };
+}
+
+export interface CatchUp {
+  plan: Plan;
+  clock: Clock;
+  finishedLabels: string[];
+}
+
+export function catchUp(plan: Plan, clock: Clock, now: number): CatchUp {
+  if (clock.status !== 'running' || clock.endsAt == null) {
+    return { plan, clock, finishedLabels: [] };
+  }
+  const finishedLabels: string[] = [];
+  let guard = 0;
+  while (clock.endsAt != null && clock.endsAt <= now && guard < 24 * 60) {
+    guard += 1;
+    finishedLabels.push(phaseLabel(plan));
+    const endedAt = clock.endsAt;
+    if (!categoryById(plan.categoryId).cycle) {
+      return {
+        plan,
+        clock: { ...clock, status: 'done', remainingMs: 0, endsAt: null },
+        finishedLabels,
+      };
+    }
+    plan = nextPhase(plan);
+    const durationMs = phaseDurationSeconds(plan) * 1000;
+    if (durationMs <= 0) {
+      return {
+        plan,
+        clock: { status: 'done', durationMs: clock.durationMs, remainingMs: 0, endsAt: null },
+        finishedLabels,
+      };
+    }
+    const endsAt = endedAt + durationMs;
+    clock = {
+      status: 'running',
+      durationMs,
+      remainingMs: Math.max(0, endsAt - now),
+      endsAt,
+    };
+  }
+  if (clock.endsAt != null && clock.endsAt <= now) {
+    clock = { ...clock, status: 'done', remainingMs: 0, endsAt: null };
+  } else if (clock.status === 'running' && clock.endsAt != null) {
+    clock = { ...clock, remainingMs: Math.max(0, clock.endsAt - now) };
+  }
+  return { plan, clock, finishedLabels };
 }
 
 export function remainingMs(clock: Clock, now: number): number {

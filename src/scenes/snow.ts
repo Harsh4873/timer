@@ -82,19 +82,19 @@ export function createSnow(): Scene {
 
       for (const flake of flakes) {
         if (!reduced) {
-          flake.vy += 0.01;
-          flake.vx *= 0.985;
+          const step = dt * 60;
+          flake.vy += 0.01 * step;
+          flake.vx *= Math.pow(0.985, step);
           flake.vy = Math.min(flake.vy, flake.speed);
           if (pointer.inside) {
             const dx = flake.x - pointer.x;
             const dy = flake.y - pointer.y;
             const dist = Math.hypot(dx, dy);
             if (dist < 130 && dist > 1) {
-              flake.vx += (-dy / dist) * 0.35;
-              flake.vy += (dx / dist) * 0.08;
+              flake.vx += (-dy / dist) * 0.35 * step;
+              flake.vy += (dx / dist) * 0.08 * step;
             }
           }
-          const step = dt * 60;
           flake.x += (flake.vx + Math.sin(time / 800 + flake.phase) * flake.drift) * step;
           flake.y += flake.vy * step;
           if (flake.y > height + 8) {

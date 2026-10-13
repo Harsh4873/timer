@@ -4,12 +4,12 @@ import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
-import { categoryById, createPlan, idleClock, nextPhase, phaseDurationSeconds, phaseLabel, startClock, tickClock, type CategoryId } from './timer.ts';
+import { catchUp, categoryById, createPlan, idleClock, nextPhase, phaseDurationSeconds, phaseLabel, progressLabel, startClock, tickClock, type CategoryId } from './timer.ts';
 
 const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
 const parsed = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true);
 const lifecycle = parsed.statements
-  .filter((statement) => ts.isFunctionDeclaration(statement) && ['tick', 'finishPhase', 'syncWakeLock'].includes(statement.name?.text ?? ''))
+  .filter((statement) => ts.isFunctionDeclaration(statement) && ['tick', 'syncWakeLock', 'spoken'].includes(statement.name?.text ?? ''))
   .map((statement) => statement.getText(parsed))
   .join('\n');
 const compiled = ts.transpileModule(lifecycle, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -22,10 +22,11 @@ function completion(category: CategoryId, screensaver = false) {
     plan,
     clock: startClock(idleClock(10_000), 0),
     wakeLock: null,
+    wakeLockPending: false,
     lastSave: 0,
     navigator: { wakeLock: { request: async () => lock } },
-    document: { body: { classList: { contains: () => screensaver } } },
-    categoryById, nextPhase, phaseDurationSeconds, phaseLabel, startClock, idleClock, tickClock,
+    document: { hidden: false, body: { classList: { contains: () => screensaver } } },
+    categoryById, nextPhase, phaseDurationSeconds, phaseLabel, progressLabel, startClock, idleClock, tickClock, catchUp,
     sound: { chime: () => {} },
     say: () => {}, notify: () => {}, render: () => {}, save: () => {},
   });
@@ -60,4 +61,56 @@ test('explicit screensaver mode keeps the lock after a one-shot session', async 
   runInContext('tick(10_000)', session.context);
   assert.equal(session.context.clock.status, 'done');
   assert.equal(session.releases(), 0);
+});
+
+test('a late tick starts the next phase from the scheduled end', () => {
+  const session = completion('pomodoro');
+  runInContext('tick(10_500)', session.context);
+  assert.equal(session.context.plan.phase, 'short-break');
+  assert.equal(session.context.clock.status, 'running');
+  assert.equal(session.context.clock.endsAt, 10_000 + 5 * 60 * 1000);
+});
+
+test('a released wake lock is requested again while the session is running', async () => {
+  let released = false;
+  let requests = 0;
+  const listeners: Array<() => void> = [];
+  const documentState = { hidden: false, body: { classList: { contains: () => false } } };
+  const context = createContext({
+    plan: createPlan('deep-work'),
+    clock: startClock(idleClock(10_000), 0),
+    wakeLock: null,
+    wakeLockPending: false,
+    lastSave: 0,
+    navigator: {
+      wakeLock: {
+        request: async () => {
+          requests += 1;
+          released = false;
+          return {
+            get released() { return released; },
+            release: async () => { released = true; },
+            addEventListener(_name: string, listener: () => void) { listeners.push(listener); },
+          };
+        },
+      },
+    },
+    document: documentState,
+    categoryById, nextPhase, phaseDurationSeconds, phaseLabel, progressLabel, startClock, idleClock, tickClock, catchUp,
+    sound: { chime: () => {} },
+    say: () => {}, notify: () => {}, render: () => {}, save: () => {},
+  });
+  runInContext(compiled, context);
+  await runInContext('syncWakeLock()', context);
+  assert.equal(requests, 1);
+  await runInContext('syncWakeLock()', context);
+  assert.equal(requests, 1);
+  released = true;
+  for (const listener of listeners) listener();
+  await setImmediate();
+  assert.equal(requests, 2);
+  context.wakeLock = null;
+  documentState.hidden = true;
+  await runInContext('syncWakeLock()', context);
+  assert.equal(requests, 2);
 });

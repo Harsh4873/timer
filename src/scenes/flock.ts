@@ -128,8 +128,8 @@ export function createFlock(): Scene {
             forceY += (dy / dist) * 0.45;
           }
         }
-        boid.vx += forceX;
-        boid.vy += forceY;
+        boid.vx += forceX * step;
+        boid.vy += forceY * step;
         const speed = Math.hypot(boid.vx, boid.vy) || 1;
         const maxSpeed = 2.7;
         const minSpeed = 1.15;
