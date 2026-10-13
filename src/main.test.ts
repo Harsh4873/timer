@@ -9,7 +9,7 @@ import { catchUp, categoryById, createPlan, idleClock, nextPhase, phaseDurationS
 const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
 const parsed = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true);
 const lifecycle = parsed.statements
-  .filter((statement) => ts.isFunctionDeclaration(statement) && ['tick', 'syncWakeLock', 'spoken'].includes(statement.name?.text ?? ''))
+  .filter((statement) => ts.isFunctionDeclaration(statement) && ['tick', 'syncWakeLock', 'spoken', 'applyCaught'].includes(statement.name?.text ?? ''))
   .map((statement) => statement.getText(parsed))
   .join('\n');
 const compiled = ts.transpileModule(lifecycle, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;

@@ -14,6 +14,11 @@ export function soundLabel(mode: SoundMode): string {
   return 'Ambient';
 }
 
+export function nextSoundMode(mode: SoundMode): SoundMode {
+  const index = SOUND_MODES.indexOf(mode);
+  return SOUND_MODES[(index + 1) % SOUND_MODES.length] ?? 'chime';
+}
+
 export interface AmbientVoice {
   label: string;
   filterType: BiquadFilterType;
@@ -57,7 +62,6 @@ export function createSound() {
 
   function audio(): AudioContext {
     if (!context) context = new AudioContext();
-    if (context.state === 'suspended') void context.resume();
     return context;
   }
 
@@ -182,15 +186,22 @@ export function createSound() {
       if (bed) applyVoice(id, false);
     },
     cycle(): void {
-      const index = SOUND_MODES.indexOf(mode);
-      this.setMode(SOUND_MODES[(index + 1) % SOUND_MODES.length] ?? 'chime');
+      this.setMode(nextSoundMode(mode));
     },
     chime(): void {
       if (!unlocked || mode === 'off') return;
-      const now = audio().currentTime;
-      tone(523.25, now, 0.38, 0.07);
-      tone(659.25, now + 0.12, 0.42, 0.06);
-      tone(783.99, now + 0.24, 0.55, 0.05);
+      const active = audio();
+      const start = () => {
+        const now = active.currentTime;
+        tone(523.25, now, 0.38, 0.07);
+        tone(659.25, now + 0.12, 0.42, 0.06);
+        tone(783.99, now + 0.24, 0.55, 0.05);
+      };
+      if (active.state === 'running') {
+        start();
+        return;
+      }
+      void active.resume().then(start).catch(() => {});
     },
   };
 }

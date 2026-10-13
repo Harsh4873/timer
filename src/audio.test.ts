@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AMBIENT_VOICES, ambientVoiceFor, createSound, isSoundMode, soundLabel } from './audio.ts';
+import { AMBIENT_VOICES, ambientVoiceFor, createSound, isSoundMode, nextSoundMode, soundLabel } from './audio.ts';
 import { SCENE_CHOICES } from './scenes/index.ts';
 
 test('sound modes round-trip through the guard', () => {
@@ -12,6 +12,9 @@ test('sound modes round-trip through the guard', () => {
   assert.equal(soundLabel('off'), 'Sound off');
   assert.equal(soundLabel('chime'), 'Chime');
   assert.equal(soundLabel('ambient'), 'Ambient');
+  assert.equal(nextSoundMode('chime'), 'ambient');
+  assert.equal(nextSoundMode('ambient'), 'off');
+  assert.equal(nextSoundMode('off'), 'chime');
 });
 
 test('every scene has a sane ambient voice', () => {

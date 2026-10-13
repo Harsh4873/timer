@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadSession, saveSession, sessionFrom } from './store.ts';
+import { loadSession, saveSession, sessionFrom, sessionSignature } from './store.ts';
 import { createPlan, idleClock, phaseDurationSeconds } from './timer.ts';
 
 const memory = new Map<string, string>();
@@ -40,6 +40,40 @@ test('sessions saved before the toggle existed open the panel', () => {
   delete legacy.settingsOpen;
   memory.set('timer.session.v1', JSON.stringify(legacy));
   assert.equal(loadSession()?.settingsOpen, true);
+});
+
+test('a save stamp round-trips and older sessions count as the first write', () => {
+  memory.clear();
+  const stamped = { ...sample(true), savedAt: 1234 };
+  saveSession(stamped);
+  assert.equal(loadSession()?.savedAt, 1234);
+  const legacy = sample(true) as unknown as Record<string, unknown>;
+  delete legacy.savedAt;
+  memory.set('timer.session.v1', JSON.stringify(legacy));
+  assert.equal(loadSession()?.savedAt, 0);
+});
+
+test('a running session ignores the ticking remainder when deciding to write', () => {
+  const plan = createPlan('pomodoro');
+  const durationMs = phaseDurationSeconds(plan) * 1000;
+  const base = sessionFrom(plan, 'rain', 'chime', {
+    status: 'running',
+    durationMs,
+    remainingMs: durationMs,
+    endsAt: 5_000,
+  }, true);
+  const later = sessionSignature({ ...base, clock: { ...base.clock, remainingMs: 1_000 } });
+  assert.equal(later, sessionSignature(base));
+  const paused = sessionSignature({
+    ...base,
+    clock: { status: 'paused', durationMs, remainingMs: 4_000, endsAt: null },
+  });
+  const pausedLess = sessionSignature({
+    ...base,
+    clock: { status: 'paused', durationMs, remainingMs: 3_000, endsAt: null },
+  });
+  assert.notEqual(paused, pausedLess);
+  assert.notEqual(paused, sessionSignature(base));
 });
 
 test('invalid sessions are still rejected', () => {

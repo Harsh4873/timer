@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="robots" content="noindex, nofollow, noarchive" />
     <meta name="description" content="A focus timer with living scenes: forest, birds, rain, ocean, night, meadow, embers, and snow." />
     <meta id="theme-color" name="theme-color" content="#10241c" />
@@ -20,7 +20,7 @@
         <h1 class="mark">Timer</h1>
         <div class="top-actions">
           <button type="button" id="sound">Chime</button>
-          <button type="button" id="screen">Screensaver</button>
+          <button type="button" id="screen" aria-keyshortcuts="F">Screensaver</button>
           <button type="button" id="settings" aria-label="Settings" title="Settings">
             <svg class="gear" viewBox="0 0 24 24" aria-hidden="true">
               <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
@@ -37,17 +37,20 @@
           <p id="phase" class="phase">Focus</p>
           <p id="progress" class="progress" hidden></p>
         </div>
-        <div class="stage">
-          <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
-            <circle class="ring-track" cx="50" cy="50" r="46"></circle>
-            <circle id="ring-value" class="ring-value" cx="50" cy="50" r="46"></circle>
-          </svg>
-          <p id="clock" class="clock" role="timer" tabindex="-1" aria-live="off" aria-label="25:00 remaining" aria-describedby="phase">25:00</p>
+        <div class="stage-slot">
+          <div class="stage">
+            <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
+              <circle class="ring-track" cx="50" cy="50" r="46"></circle>
+              <circle id="ring-value" class="ring-value" cx="50" cy="50" r="46"></circle>
+            </svg>
+            <p id="clock" class="clock" role="timer" tabindex="-1" aria-live="off" aria-label="25:00 remaining" aria-describedby="phase">25:00</p>
+          </div>
         </div>
         <div class="transport">
-          <button type="button" id="toggle" class="primary">Start</button>
-          <button type="button" id="reset">Reset</button>
+          <button type="button" id="toggle" class="primary" aria-keyshortcuts="Space">Start</button>
+          <button type="button" id="reset" aria-keyshortcuts="R">Reset</button>
         </div>
+        <p class="sr-only">Space starts or pauses. R resets. F toggles the screensaver. Escape leaves it.</p>
         <p id="live" class="sr-only" aria-live="polite"></p>
       </main>
       <footer class="dock" id="dock"></footer>

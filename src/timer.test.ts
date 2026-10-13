@@ -9,7 +9,9 @@ import {
   formatFocusMinutes,
   idleClock,
   nextPhase,
+  applyFocusLength,
   pauseClock,
+  pauseOrAdvance,
   phaseDurationSeconds,
   phaseLabel,
   progressLabel,
@@ -164,6 +166,78 @@ test('catch-up leaves a paused clock alone', () => {
   assert.equal(caught.clock.status, 'paused');
   assert.equal(caught.clock.remainingMs, clock.remainingMs);
   assert.equal(caught.finishedLabels.length, 0);
+});
+
+test('pausing at the end of focus starts the break instead of finishing', () => {
+  const plan = createPlan('pomodoro', 25 * 60);
+  const clock = startClock(idleClock(25 * 60 * 1000), 0);
+  const outcome = pauseOrAdvance(plan, clock, 25 * 60 * 1000);
+  assert.equal(outcome.plan.phase, 'short-break');
+  assert.equal(outcome.clock.status, 'running');
+  assert.equal(outcome.clock.endsAt, 25 * 60 * 1000 + 5 * 60 * 1000);
+  assert.deepEqual(outcome.finishedLabels, ['Focus']);
+});
+
+test('pausing in the middle keeps the time left', () => {
+  const plan = createPlan('pomodoro', 25 * 60);
+  const clock = startClock(idleClock(25 * 60 * 1000), 0);
+  const outcome = pauseOrAdvance(plan, clock, 10_000);
+  assert.equal(outcome.plan.phase, 'focus');
+  assert.equal(outcome.clock.status, 'paused');
+  assert.equal(outcome.clock.remainingMs, 25 * 60 * 1000 - 10_000);
+  assert.equal(outcome.finishedLabels.length, 0);
+});
+
+test('pausing at the end of a one-shot block finishes it', () => {
+  const plan = createPlan('deep-work', 60);
+  const clock = startClock(idleClock(60_000), 0);
+  const outcome = pauseOrAdvance(plan, clock, 60_000);
+  assert.equal(outcome.clock.status, 'done');
+  assert.equal(outcome.plan.phase, 'focus');
+  assert.deepEqual(outcome.finishedLabels, ['Deep work']);
+});
+
+test('a paused focus block takes a new length in full', () => {
+  const plan = createPlan('pomodoro', 25 * 60);
+  const clock = pauseClock(startClock(idleClock(25 * 60 * 1000), 0), 15 * 60 * 1000);
+  assert.equal(clock.remainingMs, 10 * 60 * 1000);
+
+  const longer = applyFocusLength(plan, clock, 50 * 60);
+  assert.equal(longer.plan.focusSeconds, 50 * 60);
+  assert.equal(longer.clock.status, 'paused');
+  assert.equal(longer.clock.durationMs, 50 * 60 * 1000);
+  assert.equal(longer.clock.remainingMs, 50 * 60 * 1000);
+
+  const shorter = applyFocusLength(plan, clock, 5 * 60);
+  assert.equal(shorter.clock.remainingMs, 5 * 60 * 1000);
+  assert.equal(shorter.clock.durationMs, 5 * 60 * 1000);
+
+  const same = applyFocusLength(plan, clock, 25 * 60);
+  assert.equal(same.clock.remainingMs, clock.remainingMs);
+  assert.equal(same.clock.durationMs, clock.durationMs);
+});
+
+test('minutes during a break change the next focus and leave the break', () => {
+  const plan = { ...createPlan('pomodoro', 25 * 60), phase: 'short-break' as const, focusBlocksCompleted: 1 };
+  const clock = pauseClock(startClock(idleClock(5 * 60 * 1000), 0), 60_000);
+  const next = applyFocusLength(plan, clock, 50 * 60);
+  assert.equal(next.plan.phase, 'short-break');
+  assert.equal(next.plan.focusSeconds, 50 * 60);
+  assert.equal(next.clock.remainingMs, clock.remainingMs);
+  assert.equal(next.clock.durationMs, clock.durationMs);
+  assert.equal(next.clock.status, 'paused');
+});
+
+test('an idle clock shows the full chosen length', () => {
+  const plan = createPlan('reading', 25 * 60);
+  const clock = idleClock(25 * 60 * 1000);
+  const next = applyFocusLength(plan, clock, 15 * 60);
+  assert.equal(next.clock.status, 'idle');
+  assert.equal(next.clock.remainingMs, 15 * 60 * 1000);
+  const running = startClock(clock, 0);
+  const ignored = applyFocusLength(plan, running, 50 * 60);
+  assert.equal(ignored.plan.focusSeconds, plan.focusSeconds);
+  assert.equal(ignored.clock, running);
 });
 
 test('progress drains as time passes', () => {

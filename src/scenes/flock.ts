@@ -140,7 +140,8 @@ export function createFlock(): Scene {
         boid.y += boid.vy * step;
         }
         const angle = Math.atan2(boid.vy, boid.vx);
-        drawBird(ctx, boid.x, boid.y, angle, time / 180 + boid.phase, 1.15, 'rgba(22, 24, 26, 0.9)');
+        const flap = reduced ? boid.phase : time / 180 + boid.phase;
+        drawBird(ctx, boid.x, boid.y, angle, flap, 1.15, 'rgba(22, 24, 26, 0.9)');
       }
 
       for (let index = pulses.length - 1; index >= 0; index -= 1) {

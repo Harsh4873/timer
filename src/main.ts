@@ -1,10 +1,11 @@
-import { createSound, soundLabel } from './audio.ts';
+import { createSound, nextSoundMode, soundLabel } from './audio.ts';
 import { SCENE_CHOICES, createScene } from './scenes/index.ts';
 import type { Scene, SceneId } from './scenes/types.ts';
-import { loadSession, saveSession, sessionFrom } from './store.ts';
+import { SESSION_KEY, loadSession, saveSession, sessionFrom, sessionSignature, type PersistedSession } from './store.ts';
 import {
   CATEGORIES,
   DURATION_PRESETS,
+  applyFocusLength,
   categoryById,
   catchUp,
   clockProgress,
@@ -14,13 +15,13 @@ import {
   formatFocusMinutes,
   idleClock,
   matchingPresetId,
+  pauseOrAdvance,
   phaseDurationSeconds,
   phaseLabel,
   progressLabel,
   remainingMs,
   startClock,
-  pauseClock,
-  clampFocusSeconds,
+  type CatchUp,
   type CategoryId,
   type Clock,
   type Plan,
@@ -75,6 +76,12 @@ let announced = '';
 let lastSave = 0;
 let progressShown = '';
 let wakeLockPending = false;
+let sceneStill = false;
+let sceneLiveUntil = 0;
+let sessionStamp = 0;
+let lastSnapshot = '';
+let minutesHeading: HTMLElement | null = null;
+let minutesNote: HTMLParagraphElement | null = null;
 
 const categoryButtons = new Map<CategoryId, HTMLButtonElement>();
 const durationButtons = new Map<string, HTMLButtonElement>();
@@ -82,7 +89,13 @@ const sceneButtons = new Map<SceneId, HTMLButtonElement>();
 let minutesInput: HTMLInputElement | null = null;
 
 function buildDock(): void {
-  dockEl!.append(group('Category', buildCategories()), group('Minutes', buildMinutes()), group('Scene', buildScenes()));
+  const minutes = group('Minutes', buildMinutes());
+  minutesHeading = minutes.querySelector('h2');
+  minutesNote = document.createElement('p');
+  minutesNote.className = 'hint';
+  minutesNote.hidden = true;
+  minutesHeading?.after(minutesNote);
+  dockEl!.append(group('Category', buildCategories()), minutes, group('Scene', buildScenes()));
 }
 
 function group(label: string, row: HTMLElement): HTMLElement {
@@ -134,13 +147,18 @@ function buildMinutes(): HTMLElement {
   input.step = 'any';
   input.inputMode = 'decimal';
   input.setAttribute('aria-label', 'Custom minutes');
+  input.addEventListener('focus', () => {
+    window.setTimeout(() => keepFieldVisible(), 50);
+  });
   input.addEventListener('change', () => {
     const value = Number(input.value);
     if (!Number.isFinite(value)) {
+      input.value = formatFocusMinutes(plan.focusSeconds);
       render();
       return;
     }
     setFocusSeconds(value * 60);
+    if (document.activeElement === input) input.value = formatFocusMinutes(plan.focusSeconds);
   });
   label.append(input);
   minutesInput = input;
@@ -173,7 +191,7 @@ function buildScenes(): HTMLElement {
 }
 
 function selectCategory(id: CategoryId): void {
-  if (clock.status === 'running') return;
+  if (clock.status === 'running' || clock.status === 'paused') return;
   if (id === plan.categoryId) return;
   const category = categoryById(id);
   plan = createPlan(id, category.defaultSeconds);
@@ -186,20 +204,9 @@ function selectCategory(id: CategoryId): void {
 
 function setFocusSeconds(seconds: number): void {
   if (clock.status === 'running') return;
-  const next = clampFocusSeconds(seconds);
-  plan = { ...plan, focusSeconds: next };
-  if (plan.phase === 'focus') {
-    if (clock.status === 'paused') {
-      clock = {
-        status: 'paused',
-        durationMs: next * 1000,
-        remainingMs: Math.min(clock.remainingMs, next * 1000),
-        endsAt: null,
-      };
-    } else {
-      clock = idleClock(next * 1000);
-    }
-  }
+  const next = applyFocusLength(plan, clock, seconds);
+  plan = next.plan;
+  clock = next.clock;
   render();
   save();
 }
@@ -219,6 +226,7 @@ function switchScene(id: SceneId): void {
 }
 
 function resize(): void {
+  sceneStill = false;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const width = Math.max(1, window.innerWidth);
   const height = Math.max(1, window.innerHeight);
@@ -231,58 +239,87 @@ function resize(): void {
 function paintClock(now: number): void {
   const ms = remainingMs(clock, now);
   const digits = formatClock(ms);
-  clockEl!.textContent = digits;
-  if (document.activeElement !== clockEl) {
-    const name = `${digits} remaining`;
-    if (clockEl!.getAttribute('aria-label') !== name) clockEl!.setAttribute('aria-label', name);
+  if (clockEl!.textContent !== digits) {
+    clockEl!.textContent = digits;
+    clockEl!.setAttribute('aria-label', `${digits} remaining`);
   }
-  ringEl!.style.strokeDasharray = `${RING} ${RING}`;
-  ringEl!.style.strokeDashoffset = String(RING * clockProgress(clock, now));
-  if (clock.status === 'running') document.title = `${formatClock(ms)} · ${phaseLabel(plan)}`;
-  else if (clock.status === 'paused') document.title = `${formatClock(ms)} paused`;
-  else if (clock.status === 'done') document.title = 'Done · Timer';
-  else document.title = 'Timer';
+  const offset = String(RING * clockProgress(clock, now));
+  if (ringEl!.style.strokeDashoffset !== offset) {
+    ringEl!.style.strokeDasharray = `${RING} ${RING}`;
+    ringEl!.style.strokeDashoffset = offset;
+  }
+  const title = clock.status === 'running'
+    ? `${digits} · ${phaseLabel(plan)}`
+    : clock.status === 'paused'
+      ? `${digits} paused`
+      : clock.status === 'done'
+        ? 'Done · Timer'
+        : 'Timer';
+  if (document.title !== title) document.title = title;
 }
 
 function render(): void {
   const locked = clock.status === 'running';
+  const categoryLocked = locked || clock.status === 'paused';
+  const nextFocus = plan.phase !== 'focus';
   phaseEl!.textContent = clock.status === 'done' ? 'Done' : phaseLabel(plan);
   for (const [id, button] of categoryButtons) {
     button.setAttribute('aria-pressed', String(id === plan.categoryId));
-    button.disabled = locked;
+    button.disabled = categoryLocked;
+  }
+  if (minutesHeading) minutesHeading.textContent = nextFocus ? 'Next focus' : 'Minutes';
+  if (minutesNote) {
+    minutesNote.hidden = !nextFocus;
+    minutesNote.textContent = 'Breaks stay 5 and 15. This sets the next focus.';
   }
   const preset = matchingPresetId(plan.focusSeconds);
+  const lengthNote = 'Sets the next focus length. Breaks stay 5 and 15 minutes.';
   for (const [id, button] of durationButtons) {
     button.setAttribute('aria-pressed', String(id === preset));
     button.disabled = locked;
+    if (nextFocus) button.title = lengthNote;
+    else button.removeAttribute('title');
   }
   if (minutesInput) {
-    minutesInput.value = formatFocusMinutes(plan.focusSeconds);
+    const showing = formatFocusMinutes(plan.focusSeconds);
+    if (document.activeElement !== minutesInput) minutesInput.value = showing;
     minutesInput.disabled = locked;
+    if (nextFocus) {
+      minutesInput.title = lengthNote;
+      minutesInput.setAttribute('aria-label', 'Next focus minutes');
+    } else {
+      minutesInput.removeAttribute('title');
+      minutesInput.setAttribute('aria-label', 'Custom minutes');
+    }
   }
   for (const [id, button] of sceneButtons) {
     button.setAttribute('aria-pressed', String(id === sceneId));
   }
-  toggleEl!.textContent = clock.status === 'running' ? 'Pause' : clock.status === 'paused' ? 'Resume' : clock.status === 'done' ? 'Again' : 'Start';
-  const voice = sound.mode === 'ambient' ? sound.label() : '';
+  const runningLabel = clock.status === 'running' ? 'Pause' : clock.status === 'paused' ? 'Resume' : clock.status === 'done' ? 'Again' : 'Start';
+  toggleEl!.textContent = runningLabel;
+  toggleEl!.title = `${runningLabel} (Space)`;
+  resetEl!.title = 'Reset (R)';
+  const nextSound = soundLabel(nextSoundMode(sound.mode));
   soundEl!.textContent = soundLabel(sound.mode);
   soundEl!.setAttribute('aria-pressed', String(sound.mode !== 'off'));
   if (sound.mode === 'ambient') {
+    const voice = sound.label();
     soundEl!.setAttribute('aria-label', `Ambient room tone, ${voice}`);
-    soundEl!.setAttribute('aria-description', `${voice} follows the scene`);
-    soundEl!.title = `${voice} follows the scene`;
+    soundEl!.setAttribute('aria-description', `${voice} follows the scene. Next, ${nextSound}.`);
+    soundEl!.title = `${voice} follows the scene. Next, ${nextSound}.`;
   } else if (sound.mode === 'chime') {
     soundEl!.setAttribute('aria-label', 'Chime');
-    soundEl!.setAttribute('aria-description', 'Plays a chime when a block ends');
-    soundEl!.title = 'Plays a chime when a block ends';
+    soundEl!.setAttribute('aria-description', `Plays a chime when a block ends. Next, ${nextSound}.`);
+    soundEl!.title = `Plays a chime when a block ends. Next, ${nextSound}.`;
   } else {
     soundEl!.setAttribute('aria-label', 'Sound off');
-    soundEl!.setAttribute('aria-description', 'No chime or room tone');
-    soundEl!.title = 'No chime or room tone';
+    soundEl!.setAttribute('aria-description', `No chime or room tone. Next, ${nextSound}.`);
+    soundEl!.title = `No chime or room tone. Next, ${nextSound}.`;
   }
   const screening = document.body.classList.contains('screen');
   const narrow = window.matchMedia('(max-width: 720px)').matches;
   screenEl!.textContent = screening ? (narrow ? 'Exit' : 'Exit screen') : (narrow ? 'Screen' : 'Screensaver');
+  screenEl!.title = screening ? 'Exit screensaver (F or Escape)' : 'Screensaver (F)';
   screenEl!.setAttribute('aria-pressed', String(screening));
   const settingsOpen = !document.body.classList.contains('settings-hidden');
   settingsEl!.setAttribute('aria-pressed', String(settingsOpen));
@@ -338,9 +375,7 @@ function notify(title: string, body: string): void {
   }
 }
 
-function tick(now: number): void {
-  if (clock.status !== 'running') return;
-  const caught = catchUp(plan, clock, now);
+function applyCaught(caught: CatchUp, now: number): boolean {
   const finished = caught.finishedLabels.length > 0;
   plan = caught.plan;
   clock = caught.clock;
@@ -363,24 +398,54 @@ function tick(now: number): void {
     lastSave = now;
     save();
   }
+  return finished;
+}
+
+function tick(now: number): void {
+  if (clock.status !== 'running') return;
+  applyCaught(catchUp(plan, clock, now), now);
 }
 
 async function toggleRun(): Promise<void> {
   const now = Date.now();
   const starting = clock.status !== 'running';
-  clock = starting ? startClock(clock, now) : pauseClock(clock, now);
-  say(clock.status === 'running' ? `${phaseLabel(plan)} started.` : 'Paused.');
-  render();
-  save();
-  wake();
-  if (starting && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-    try {
-      void Notification.requestPermission();
-    } catch {
-      // Permission can fail in embedded browsers.
+  if (starting) {
+    clock = startClock(clock, now);
+    say(`${phaseLabel(plan)} started.`);
+    render();
+    save();
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      try {
+        void Notification.requestPermission();
+      } catch {
+        // Permission can fail in embedded browsers.
+      }
+    }
+  } else {
+    const outcome = pauseOrAdvance(plan, clock, now);
+    if (outcome.finishedLabels.length > 0) {
+      plan = outcome.plan;
+      clock = outcome.clock;
+      try {
+        await sound.unlock();
+      } catch {
+        // A rejected resume still has to advance the phase.
+      }
+      applyCaught(outcome, now);
+    } else {
+      plan = outcome.plan;
+      clock = outcome.clock;
+      say('Paused.');
+      render();
+      save();
     }
   }
-  await sound.unlock();
+  wake();
+  try {
+    await sound.unlock();
+  } catch {
+    // Autoplay policies can reject the resume.
+  }
   await syncWakeLock();
 }
 
@@ -394,8 +459,18 @@ function reset(): void {
   void syncWakeLock();
 }
 
+function currentSession(): PersistedSession {
+  return sessionFrom(plan, sceneId, sound.mode, clock, !document.body.classList.contains('settings-hidden'));
+}
+
 function save(): void {
-  saveSession(sessionFrom(plan, sceneId, sound.mode, clock, !document.body.classList.contains('settings-hidden')));
+  if (document.hidden) return;
+  const session = currentSession();
+  const snapshot = sessionSignature(session);
+  if (snapshot === lastSnapshot) return;
+  lastSnapshot = snapshot;
+  sessionStamp = Date.now();
+  saveSession({ ...session, savedAt: sessionStamp });
 }
 
 function toggleSettings(): void {
@@ -455,6 +530,13 @@ function hideChrome(): void {
   document.body.classList.add('chrome-hidden');
 }
 
+function controlHasFocus(): boolean {
+  const active = document.activeElement;
+  return active instanceof HTMLElement
+    && active.matches(':focus-visible')
+    && Boolean(active.closest('.top, .dock, .transport, .status'));
+}
+
 function armIdle(): void {
   window.clearTimeout(idleTimer);
   const screening = document.body.classList.contains('screen');
@@ -463,6 +545,10 @@ function armIdle(): void {
   idleTimer = window.setTimeout(() => {
     if (reducedMotion.matches && !document.body.classList.contains('screen')) return;
     if (clock.status !== 'running' && !document.body.classList.contains('screen')) return;
+    if (!document.body.classList.contains('screen') && controlHasFocus()) {
+      armIdle();
+      return;
+    }
     hideChrome();
   }, IDLE_MS);
 }
@@ -499,24 +585,31 @@ async function setScreensaver(on: boolean): Promise<void> {
   await syncWakeLock();
 }
 
-function restore(): void {
-  const saved = loadSession();
-  if (!saved) return;
+function adopt(saved: PersistedSession): void {
+  const stamp = saved.savedAt ?? 0;
+  if (stamp < sessionStamp) return;
   plan = {
     categoryId: saved.categoryId,
     focusSeconds: saved.focusSeconds,
     phase: saved.phase,
     focusBlocksCompleted: saved.focusBlocksCompleted,
   };
-  sceneId = saved.sceneId;
-  scene = createScene(sceneId);
+  if (saved.sceneId !== sceneId) {
+    sceneId = saved.sceneId;
+    scene = createScene(sceneId);
+    sceneStill = false;
+    resize();
+  }
   sound.setScene(saved.sceneId);
   sound.setMode(saved.sound);
   document.body.classList.toggle('settings-hidden', saved.settingsOpen === false);
   const caught = catchUp(plan, saved.clock, Date.now());
+  const finished = caught.finishedLabels.length > 0;
   plan = caught.plan;
   clock = caught.clock;
-  if (caught.finishedLabels.length > 0) {
+  sessionStamp = stamp;
+  if (themeMeta) themeMeta.content = THEME[sceneId];
+  if (finished) {
     if (clock.status === 'running') {
       const lead = caught.finishedLabels.length === 1
         ? `${phaseLabel(plan)} is underway.`
@@ -526,20 +619,72 @@ function restore(): void {
       say(spoken('The block finished while this was closed.'));
     }
     notify(phaseLabel(plan), 'A block finished while this was closed.');
+    lastSnapshot = '';
     save();
+  } else {
+    lastSnapshot = sessionSignature(currentSession());
   }
+  render();
+  void syncWakeLock();
+  armIdle();
+}
+
+function restore(): void {
+  const saved = loadSession();
+  if (!saved) return;
+  adopt(saved);
+}
+
+function paintScene(time: number): void {
+  const reduced = reducedMotion.matches;
+  if (reduced && sceneStill && time >= sceneLiveUntil) return;
+  scene.draw(ctx!, time, reduced);
+  sceneStill = reduced;
+}
+
+function syncVisualViewport(): void {
+  const viewport = window.visualViewport;
+  const height = viewport?.height ?? window.innerHeight;
+  const top = viewport?.offsetTop ?? 0;
+  document.documentElement.style.setProperty('--vv-height', `${Math.max(1, height)}px`);
+  document.documentElement.style.setProperty('--vv-top', `${top}px`);
+}
+
+function keepFieldVisible(): void {
+  const field = minutesInput;
+  if (!field || document.activeElement !== field) return;
+  const viewport = window.visualViewport;
+  const rect = field.getBoundingClientRect();
+  const top = viewport?.offsetTop ?? 0;
+  const bottom = top + (viewport?.height ?? window.innerHeight);
+  if (rect.top >= top + 8 && rect.bottom <= bottom - 8) return;
+  field.scrollIntoView({ block: 'center' });
+}
+
+function onViewportChange(relayout: boolean): void {
+  syncVisualViewport();
+  if (!relayout) {
+    keepFieldVisible();
+    return;
+  }
+  resize();
+  render();
+  keepFieldVisible();
 }
 
 function frame(time: number): void {
   frameTime = time;
   if (!document.hidden) {
-    scene.draw(ctx!, time, reducedMotion.matches);
-    paintClock(Date.now());
+    const now = Date.now();
+    if (clock.status === 'running' && clock.endsAt != null && clock.endsAt <= now) tick(now);
+    paintScene(time);
+    paintClock(now);
   }
   window.requestAnimationFrame(frame);
 }
 
 buildDock();
+syncVisualViewport();
 restore();
 resize();
 if (themeMeta) themeMeta.content = THEME[sceneId];
@@ -563,30 +708,52 @@ screenEl.addEventListener('click', () => {
 });
 settingsEl.addEventListener('click', toggleSettings);
 
-window.addEventListener('resize', resize);
+window.addEventListener('resize', () => onViewportChange(true));
+window.visualViewport?.addEventListener('resize', () => onViewportChange(true));
+window.visualViewport?.addEventListener('scroll', () => onViewportChange(false));
 window.addEventListener('pointermove', (event) => {
+  sceneStill = false;
   scene.pointer({ x: event.clientX, y: event.clientY, inside: true });
   wake();
 });
 window.addEventListener('pointerdown', (event) => {
+  void sound.unlock().catch(() => {
+    // Autoplay policies can reject the resume.
+  });
+  sceneStill = false;
   const hidden = document.body.classList.contains('chrome-hidden');
   wake();
   const target = event.target instanceof Element ? event.target : null;
   const onControl = Boolean(target?.closest('button, input, a, .dock, .top'));
   if (hidden && !onControl) return;
-  if (!onControl) scene.pulse(event.clientX, event.clientY, frameTime);
+  if (!onControl) {
+    sceneLiveUntil = performance.now() + 1800;
+    scene.pulse(event.clientX, event.clientY, frameTime);
+  }
 });
 window.addEventListener('wheel', wake, { passive: true });
 window.addEventListener('pointerleave', () => {
+  sceneStill = false;
   scene.pointer({ x: 0, y: 0, inside: false });
 });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
-    tick(Date.now());
+    const saved = loadSession();
+    if (saved && (saved.savedAt ?? 0) > sessionStamp) adopt(saved);
+    else {
+      tick(Date.now());
+      save();
+    }
     wake();
     wakeLock = null;
   }
   void syncWakeLock();
+});
+window.addEventListener('storage', (event) => {
+  if (event.key !== SESSION_KEY) return;
+  const saved = loadSession();
+  if (!saved || (saved.savedAt ?? 0) <= sessionStamp) return;
+  adopt(saved);
 });
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement && document.body.classList.contains('screen')) {
@@ -597,6 +764,7 @@ document.addEventListener('fullscreenchange', () => {
   }
 });
 reducedMotion.addEventListener('change', () => {
+  sceneStill = false;
   if (reducedMotion.matches && !document.body.classList.contains('screen')) {
     window.clearTimeout(idleTimer);
     document.body.classList.remove('chrome-hidden');
@@ -607,6 +775,9 @@ reducedMotion.addEventListener('change', () => {
 
 document.addEventListener('keydown', (event) => {
   if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+  void sound.unlock().catch(() => {
+    // Autoplay policies can reject the resume.
+  });
   const target = event.target instanceof HTMLElement ? event.target : null;
   const typing = Boolean(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'));
   if (typing) {
@@ -618,15 +789,8 @@ document.addEventListener('keydown', (event) => {
     void setScreensaver(false);
     return;
   }
-  const hidden = document.body.classList.contains('chrome-hidden');
-  const shortcut = event.key === ' ' || event.key === 'f' || event.key === 'F' || event.key === 'r' || event.key === 'R';
-  if (hidden && shortcut) {
-    if (event.key === ' ') event.preventDefault();
-    wake();
-    return;
-  }
   wake();
-  if (target && target.tagName === 'BUTTON') return;
+  if (target && target.tagName === 'BUTTON' && event.key === ' ') return;
   if (event.key === ' ') {
     event.preventDefault();
     void toggleRun();

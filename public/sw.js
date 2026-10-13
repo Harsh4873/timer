@@ -1,4 +1,4 @@
-const CACHE = 'timer-shell-v1';
+const CACHE = 'timer-shell-v2';
 const PRECACHE = ['./', './index.html', './favicon.svg', './manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
@@ -23,7 +23,13 @@ self.addEventListener('fetch', (event) => {
     const cache = await caches.open(CACHE);
     try {
       const response = await fetch(request);
-      if (response.ok) await cache.put(request, response.clone());
+      if (response.ok) {
+        try {
+          await cache.put(request, response.clone());
+        } catch {
+          // A full cache should not throw away the response that just succeeded.
+        }
+      }
       return response;
     } catch {
       const cached = await cache.match(request);

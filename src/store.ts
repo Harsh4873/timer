@@ -9,7 +9,7 @@ import {
   type Plan,
 } from './timer.ts';
 
-const KEY = 'timer.session.v1';
+export const SESSION_KEY = 'timer.session.v1';
 
 export interface PersistedSession {
   categoryId: CategoryId;
@@ -20,6 +20,7 @@ export interface PersistedSession {
   phase: PhaseKind;
   focusBlocksCompleted: number;
   settingsOpen: boolean;
+  savedAt?: number;
 }
 
 function isPhase(value: unknown): value is PhaseKind {
@@ -39,7 +40,7 @@ function isClock(value: unknown): value is Clock {
 
 export function loadSession(): PersistedSession | null {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PersistedSession>;
     if (!isCategoryId(parsed.categoryId) || !isSceneId(parsed.sceneId) || !isSoundMode(parsed.sound)) return null;
@@ -58,6 +59,7 @@ export function loadSession(): PersistedSession | null {
       phase: parsed.phase,
       focusBlocksCompleted: Math.floor(parsed.focusBlocksCompleted ?? 0),
       settingsOpen: parsed.settingsOpen !== false,
+      savedAt: typeof parsed.savedAt === 'number' && Number.isFinite(parsed.savedAt) && parsed.savedAt >= 0 ? parsed.savedAt : 0,
     };
   } catch {
     return null;
@@ -66,7 +68,7 @@ export function loadSession(): PersistedSession | null {
 
 export function saveSession(session: PersistedSession): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(session));
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   } catch {
     // Private mode can refuse storage. The timer still runs.
   }
@@ -83,4 +85,20 @@ export function sessionFrom(plan: Plan, sceneId: SceneId, sound: SoundMode, cloc
     focusBlocksCompleted: plan.focusBlocksCompleted,
     settingsOpen,
   };
+}
+
+export function sessionSignature(session: PersistedSession): string {
+  const clock = session.clock.status === 'running'
+    ? { ...session.clock, remainingMs: 0 }
+    : session.clock;
+  return JSON.stringify({
+    categoryId: session.categoryId,
+    focusSeconds: session.focusSeconds,
+    sceneId: session.sceneId,
+    sound: session.sound,
+    clock,
+    phase: session.phase,
+    focusBlocksCompleted: session.focusBlocksCompleted,
+    settingsOpen: session.settingsOpen,
+  });
 }

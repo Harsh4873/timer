@@ -205,6 +205,28 @@ export function pauseClock(clock: Clock, now: number): Clock {
   return { ...clock, status: 'paused', remainingMs: remaining, endsAt: null };
 }
 
+export function applyFocusLength(plan: Plan, clock: Clock, seconds: number): { plan: Plan; clock: Clock } {
+  if (clock.status === 'running') return { plan, clock };
+  const next = clampFocusSeconds(seconds);
+  const nextPlan = { ...plan, focusSeconds: next };
+  if (nextPlan.phase !== 'focus') return { plan: nextPlan, clock };
+  const durationMs = next * 1000;
+  if (clock.status === 'paused') {
+    const remainingMs = next === plan.focusSeconds ? Math.min(clock.remainingMs, durationMs) : durationMs;
+    return {
+      plan: nextPlan,
+      clock: { status: 'paused', durationMs, remainingMs, endsAt: null },
+    };
+  }
+  return { plan: nextPlan, clock: idleClock(durationMs) };
+}
+
+export function pauseOrAdvance(plan: Plan, clock: Clock, now: number): CatchUp {
+  const caught = catchUp(plan, clock, now);
+  if (caught.finishedLabels.length > 0 || caught.clock.status !== 'running') return caught;
+  return { plan: caught.plan, clock: pauseClock(caught.clock, now), finishedLabels: [] };
+}
+
 export function tickClock(clock: Clock, now: number): Clock {
   if (clock.status !== 'running' || clock.endsAt == null) return clock;
   const remaining = Math.max(0, clock.endsAt - now);
